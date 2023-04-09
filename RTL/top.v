@@ -20,7 +20,8 @@ module top
     parameter integer PEXILS = HIEGHT*WIDTH,
     // parameter integer ADDR_WR = (PEXILS/(FACTOR**2)),
     parameter integer TICK_PER_HALF = 217,    // Fsys/(2*baudrate)
-    parameter integer SZ = (8*BPP)
+    parameter integer SZ = (8*BPP),
+    parameter integer CNT_VAL = 500_000
 )
 //-----------------Ports-----------------\\
 (
@@ -40,14 +41,42 @@ wire [SZ-1:0] pixel_mid, pixel_mid_out, ram_out, rom_out, eff_out, shrink_out;
 wire [$clog2(PEXILS)-1:0] rd_adrr_w, rd_adrr_eff, rd_adrr_sh;
 wire [$clog2(PEXILS)-1:0] wr_adrr_w, wr_adrr_eff, wr_adrr_sh;
 wire ram_done, b_clk, effect_done, shrink_done, done_tx, start_shrink_w, start_effects_w, ram_done_wr, ram_done_rd;
+wire start_stbl, shr_or_eff_stbl;
+wire [1:0] effect_stbl;
 
 //-----------------Effect Selection-----------------\\
-assign start_shrink_w  = (shr_or_eff  && start);
-assign start_effects_w = (!shr_or_eff && start);
-assign rd_adrr_w       = shr_or_eff? rd_adrr_sh  : rd_adrr_eff;
-assign wr_adrr_w       = shr_or_eff? wr_adrr_sh  : wr_adrr_eff;
-assign pixel_mid       = shr_or_eff? shrink_out  : eff_out;
-assign apply_done      = shr_or_eff? shrink_done : effect_done;
+assign start_shrink_w  = (shr_or_eff_stbl  && start_stbl);
+assign start_effects_w = (!shr_or_eff_stbl && start_stbl);
+assign rd_adrr_w       = shr_or_eff_stbl? rd_adrr_sh  : rd_adrr_eff;
+assign wr_adrr_w       = shr_or_eff_stbl? wr_adrr_sh  : wr_adrr_eff;
+assign pixel_mid       = shr_or_eff_stbl? shrink_out  : eff_out;
+assign apply_done      = shr_or_eff_stbl? shrink_done : effect_done;
+
+//-----------------Debouncing-----------------\\
+Debounce #(CNT_VAL) dpb_rst (
+    .clk(clk),
+    .rst(rst),
+    .btn(start),
+    .stbl(start_stbl)
+);
+Debounce #(CNT_VAL) dpb_strt (
+    .clk(clk),
+    .rst(rst),
+    .btn(shr_or_eff),
+    .stbl(shr_or_eff_stbl)
+);
+Debounce #(CNT_VAL) dpb (
+    .clk(clk),
+    .rst(rst),
+    .btn(effect[0]),
+    .stbl(effect_stbl[0])
+);
+Debounce #(CNT_VAL) dpb (
+    .clk(clk),
+    .rst(rst),
+    .btn(effect[1]),
+    .stbl(effect_stbl[1])
+);
 
 //-----------------ROM-----------------\\
 rom #(.HIEGHT(HIEGHT), .WIDTH(WIDTH), .BPP(BPP)) ROM (
@@ -70,11 +99,11 @@ shrink #(.FACTOR(FACTOR), .BPP(BPP), .HIEGHT(HIEGHT), .WIDTH(WIDTH)) dwnsamp(
 );
 
 //-----------------Effects module-----------------\\
-effects #(.VALUE(VALUE)) effect(
+effects #(.VALUE(VALUE)) effu(
     .clk(clk),
     .rst(rst),
     .start(start_effects_w),
-    .eff(effect),
+    .eff(effect_stbl),
     .pixel_in(rom_out),
 
     .rd_adrr(rd_adrr_eff),
@@ -97,7 +126,7 @@ fifo #(.HIEGHT(HIEGHT), .WIDTH(WIDTH), .BPP(BPP)) fi_fo (
     .rd_clk(b_clk),
     .rst(rst),
     .rd_en(done_tx),
-    .sh_en(shr_or_eff),
+    .sh_en(shr_or_eff_stbl),
     .wr_en(!apply_done),
     .wr_addr(wr_adrr_w),
     .write_data(pixel_mid),
@@ -110,7 +139,7 @@ fifo #(.HIEGHT(HIEGHT), .WIDTH(WIDTH), .BPP(BPP)) fi_fo (
 assign ram_done = (ram_done_rd)? 1'b0 : ram_done_wr;
 
 //-----------------UART-Tx-----------------\\
-Tx tx(
+Tx txu(
     .baud_clk(b_clk),
     .rst(rst),
     .send(ram_done),
